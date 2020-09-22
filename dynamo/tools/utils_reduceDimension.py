@@ -11,10 +11,12 @@ from .psl_py import *
 def prepare_dim_reduction(adata,
                           genes=None,
                           layer=None,
-                          basis='pca',
+                          basis='adapmap', # ?
                           dims=None,
-                          n_pca_components=30,
-                          n_components=2,):
+                          n_eigs=30,
+                          k=15,
+                          n_components=2,
+                          *kwargs):
     if genes is not None:
         genes = adata.var_name.intersection(genes).to_list()
         if len(genes) == 0:
@@ -27,9 +29,9 @@ def prepare_dim_reduction(adata,
     has_basis = False
 
     if basis is not None:
-        if basis.split(prefix)[-1] not in ['pca', 'umap', 'trimap', 'tsne', 'diffmap']:
+        if basis.split(prefix)[-1] not in ['pca', 'umap', 'trimap', 'tsne', 'diffmap', 'adapmap']:
             raise ValueError(f"basis (or the suffix of basis) can only be one of "
-                             f"['pca', 'umap', 'trimap', 'tsne', 'diffmap'].")
+                             f"['pca', 'umap', 'trimap', 'tsne', 'diffmap', 'adapmap'].")
         if basis.startswith(prefix):
             basis = basis
         else:
@@ -50,13 +52,39 @@ def prepare_dim_reduction(adata,
                         else adata[:, adata.var.use_for_dynamics].layers[layer]
 
             X_data = log1p_(adata, X_data)
+            
+    if basis == 'adapmap':
+        try:
+            import dbmap as dm
+        except ImportError:
+            print("The package 'dbmap' is required. Please install it 'with pip3 install dbmap'.")
+            sys.exit()
+        if layer is None:
+            if genes is not None:
+                X_data = adata[:, genes].X
+            else:
+                X_data = adata.X if 'use_for_dynamics' not in adata.var.keys() \
+                    else adata[:, adata.var.use_for_dynamics].X
+        else:
+            if genes is not None:
+                X_data = adata[:, genes].layers[layer]
+            else:
+                X_data = adata.layers[layer] if 'use_for_dynamics' not in adata.var.keys() \
+                        else adata[:, adata.var.use_for_dynamics].layers[layer]
+
+        log_data = log1p_(adata, X_data)
+        diff = dm.diffusion.Diffusor(n_components=n_eigs, n_neighbors = k, *kwargs).fit(log_data)
+        sc = diff.transform(log_data)
+        X_data = sc
+        adata.obsm['X_adapmap'] = X_data
+    
     else:
         pca_key = "X_pca" if layer is None else layer + "_pca"
-        n_pca_components = max(max(dims), n_pca_components) if dims is not None else n_pca_components
+        n_eigs = max(max(dims), n_eigs) if dims is not None else n_eigs
 
         if basis not in adata.obsm.keys():
             if genes is not None or pca_key not in adata.obsm.keys() or \
-                    adata.obsm[pca_key].shape[1] < n_pca_components:
+                    adata.obsm[pca_key].shape[1] < n_eigs:
                 if layer is None:
                     if genes is not None:
                         CM = adata[:, genes].X
@@ -76,7 +104,7 @@ def prepare_dim_reduction(adata,
                 valid_ind = np.logical_and(np.isfinite(cm_genesums), cm_genesums != 0)
                 valid_ind = np.array(valid_ind).flatten()
                 CM = CM[:, valid_ind]
-                adata, fit, _ = pca(adata, CM, n_pca_components=n_pca_components, pca_key=pca_key)
+                adata, fit, _ = pca(adata, CM, n_pca_components=n_eigs, pca_key=pca_key)
                 adata.uns["explained_variance_ratio_"] = fit.explained_variance_ratio_[1:]
         else:
             has_basis = True
@@ -96,7 +124,7 @@ def prepare_dim_reduction(adata,
             valid_ind = np.logical_and(np.isfinite(cm_genesums), cm_genesums != 0)
             valid_ind = np.array(valid_ind).flatten()
             CM = CM[:, valid_ind]
-            adata, fit, _ = pca(adata, CM, n_pca_components=n_pca_components, pca_key=pca_key)
+            adata, fit, _ = pca(adata, CM, n_pca_components=n_eigs, pca_key=pca_key)
             adata.uns["explained_variance_ratio_"] = fit.explained_variance_ratio_[1:]
 
             X_data = adata.obsm[pca_key]
@@ -105,7 +133,7 @@ def prepare_dim_reduction(adata,
 
     return X_data, n_components, has_basis, basis
 
-def run_reduce_dim(adata, X_data, n_components, n_pca_components, reduction_method, embedding_key, n_neighbors,
+def run_reduce_dim(adata, X_data, n_components, n_eigs, reduction_method, embedding_key, n_neighbors,
                    neighbor_key, cores, kwargs):
     if reduction_method == "trimap":
         import trimap
@@ -114,7 +142,7 @@ def run_reduce_dim(adata, X_data, n_components, n_pca_components, reduction_meth
             n_inliers=20,
             n_outliers=10,
             n_random=10,
-            distance="euclidean",  # cosine
+            distance="cosine",  # for sure cosine
             weight_adj=1000.0,
             apply_pca=False,
         )
@@ -192,7 +220,7 @@ def run_reduce_dim(adata, X_data, n_components, n_pca_components, reduction_meth
 
         adata.obsp[conn_key], adata.obsp[dist_key] = graph, knn_dists
 
-        adata.uns["umap_fit"] = {"fit": mapper, "n_pca_components": n_pca_components}
+        adata.uns["umap_fit"] = {"fit": mapper, "n_eigs": n_eigs}
     elif reduction_method == "psl":
         adj_mat, X_dim = psl(
             X_data, d=n_components, K=n_neighbors
