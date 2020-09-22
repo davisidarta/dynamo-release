@@ -192,7 +192,7 @@ def run_reduce_dim(adata, X_data, n_components, n_eigs, reduction_method, embedd
             "verbose": False,
         }
         umap_kwargs = update_dict(_umap_kwargs, kwargs)
-
+    
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             (
