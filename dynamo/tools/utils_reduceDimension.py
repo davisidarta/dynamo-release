@@ -11,7 +11,7 @@ from .psl_py import *
 def prepare_dim_reduction(adata,
                           genes=None,
                           layer=None,
-                          basis='adapmap', # ?
+                          basis='pca', 
                           dims=None,
                           n_eigs=30,
                           k=15,
